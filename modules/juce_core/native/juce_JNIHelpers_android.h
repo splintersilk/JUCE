@@ -1,21 +1,33 @@
 /*
   ==============================================================================
 
-   This file is part of the JUCE library.
-   Copyright (c) 2022 - Raw Material Software Limited
+   This file is part of the JUCE framework.
+   Copyright (c) Raw Material Software Limited
 
-   JUCE is an open source library subject to commercial or open-source
+   JUCE is an open source framework subject to commercial or open source
    licensing.
 
-   The code included in this file is provided under the terms of the ISC license
-   http://www.isc.org/downloads/software-support-policy/isc-license. Permission
-   To use, copy, modify, and/or distribute this software for any purpose with or
-   without fee is hereby granted provided that the above copyright notice and
-   this permission notice appear in all copies.
+   By downloading, installing, or using the JUCE framework, or combining the
+   JUCE framework with any other source code, object code, content or any other
+   copyrightable work, you agree to the terms of the JUCE End User Licence
+   Agreement, and all incorporated terms including the JUCE Privacy Policy and
+   the JUCE Website Terms of Service, as applicable, which will bind you. If you
+   do not agree to the terms of these agreements, we will not license the JUCE
+   framework to you, and you must discontinue the installation or download
+   process and cease use of the JUCE framework.
 
-   JUCE IS PROVIDED "AS IS" WITHOUT ANY WARRANTY, AND ALL WARRANTIES, WHETHER
-   EXPRESSED OR IMPLIED, INCLUDING MERCHANTABILITY AND FITNESS FOR PURPOSE, ARE
-   DISCLAIMED.
+   JUCE End User Licence Agreement: https://juce.com/legal/juce-8-licence/
+   JUCE Privacy Policy: https://juce.com/juce-privacy-policy
+   JUCE Website Terms of Service: https://juce.com/juce-website-terms-of-service/
+
+   Or:
+
+   You may also use this code under the terms of the AGPLv3:
+   https://www.gnu.org/licenses/agpl-3.0.en.html
+
+   THE JUCE FRAMEWORK IS PROVIDED "AS IS" WITHOUT ANY WARRANTY, AND ALL
+   WARRANTIES, WHETHER EXPRESSED OR IMPLIED, INCLUDING WARRANTY OF
+   MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, ARE DISCLAIMED.
 
   ==============================================================================
 */
@@ -31,8 +43,15 @@ template <typename JavaType>
 class LocalRef
 {
 public:
-    LocalRef() noexcept                          : obj (nullptr) {}
-    explicit LocalRef (JavaType o) noexcept      : obj (o) {}
+    LocalRef() noexcept = default;
+
+    /*  This constructor must not be used to wrap local references that were not created through
+        JNI, i.e. for native function callback parameters.
+    */
+    explicit LocalRef (JavaType o) noexcept
+        : LocalRef (o, false)
+    {}
+
     LocalRef (const LocalRef& other) noexcept    : obj (retain (other.obj)) {}
     LocalRef (LocalRef&& other) noexcept         : obj (nullptr) { std::swap (obj, other.obj); }
     ~LocalRef()                                  { clear(); }
@@ -48,30 +67,82 @@ public:
 
     LocalRef& operator= (const LocalRef& other)
     {
-        JavaType newObj = retain (other.obj);
-        clear();
-        obj = newObj;
+        auto tmp = other;
+        std::swap (tmp.obj, obj);
         return *this;
     }
 
-    LocalRef& operator= (LocalRef&& other)
+    LocalRef& operator= (LocalRef&& other) noexcept
     {
-        clear();
-        std::swap (other.obj, obj);
+        auto tmp = std::move (other);
+        std::swap (tmp.obj, obj);
         return *this;
     }
+
+    bool operator== (std::nullptr_t) const noexcept { return obj == nullptr; }
+    bool operator!= (std::nullptr_t) const noexcept { return obj != nullptr; }
 
     operator JavaType() const noexcept   { return obj; }
+
     JavaType get() const noexcept        { return obj; }
 
-private:
-    JavaType obj;
+    auto release()
+    {
+        return std::exchange (obj, nullptr);
+    }
 
+    /** Creates a new internal local reference. */
+    static auto addOwner (JavaType o)
+    {
+        return LocalRef { o, true };
+    }
+
+    /** Takes ownership of the passed in local reference, and deletes it when the LocalRef goes out
+        of scope.
+    */
+    static auto becomeOwner (JavaType o)
+    {
+        return LocalRef { o, false };
+    }
+
+private:
     static JavaType retain (JavaType obj)
     {
         return obj == nullptr ? nullptr : (JavaType) getEnv()->NewLocalRef (obj);
     }
+
+    /*  We cannot delete local references that were not created by JNI, e.g. references that were
+        created by the VM and passed into the native function.
+
+        For these references we should use createNewLocalRef = true, which will create a new
+        local reference that this wrapper is allowed to delete.
+
+        Doing otherwise will result in an "Attempt to remove non-JNI local reference" warning in the
+        VM, which could even cause crashes in future VM implementations.
+    */
+    LocalRef (JavaType o, bool createNewLocalRef) noexcept
+        : obj (createNewLocalRef ? retain (o) : o)
+    {}
+
+    JavaType obj = nullptr;
 };
+
+/*  Creates a new local reference that shares ownership with the passed in pointer.
+
+    Can be used for wrapping function parameters that were created outside the JNI.
+*/
+template <class JavaType>
+auto addLocalRefOwner (JavaType t)
+{
+    return LocalRef<JavaType>::addOwner (t);
+}
+
+/*   Wraps a local reference and destroys it when it goes out of scope. */
+template <class JavaType>
+auto becomeLocalRefOwner (JavaType t)
+{
+    return LocalRef<JavaType>::becomeOwner (t);
+}
 
 //==============================================================================
 template <typename JavaType>
@@ -241,11 +312,12 @@ template <typename T, size_t N> constexpr auto numBytes (const T (&) [N]) { retu
 
 //==============================================================================
 #define DECLARE_JNI_CLASS_WITH_MIN_SDK(CppClassName, javaPath, minSDK) \
+    static_assert (minSDK >= 24, "There's no need to supply a min SDK lower than JUCE's minimum requirement"); \
     DECLARE_JNI_CLASS_WITH_BYTECODE (CppClassName, javaPath, minSDK, nullptr)
 
 //==============================================================================
 #define DECLARE_JNI_CLASS(CppClassName, javaPath) \
-    DECLARE_JNI_CLASS_WITH_MIN_SDK (CppClassName, javaPath, 16)
+    DECLARE_JNI_CLASS_WITH_MIN_SDK (CppClassName, javaPath, 24)
 
 //==============================================================================
 #define JNI_CLASS_MEMBERS(METHOD, STATICMETHOD, FIELD, STATICFIELD, CALLBACK) \
@@ -288,7 +360,7 @@ DECLARE_JNI_CLASS (AndroidActivity, "android/app/Activity")
  METHOD (startActivityForResult,               "startActivityForResult",          "(Landroid/content/Intent;I)V") \
  METHOD (setArguments,                         "setArguments",                    "(Landroid/os/Bundle;)V")
 
-DECLARE_JNI_CLASS_WITH_MIN_SDK (AndroidFragment, "android/app/Fragment", 11)
+DECLARE_JNI_CLASS (AndroidFragment, "android/app/Fragment")
 #undef JNI_CLASS_MEMBERS
 
 //==============================================================================
@@ -298,7 +370,7 @@ DECLARE_JNI_CLASS_WITH_MIN_SDK (AndroidFragment, "android/app/Fragment", 11)
   METHOD (setContentType, "setContentType", "(I)Landroid/media/AudioAttributes$Builder;") \
   METHOD (setUsage,       "setUsage",       "(I)Landroid/media/AudioAttributes$Builder;")
 
-DECLARE_JNI_CLASS_WITH_MIN_SDK (AndroidAudioAttributesBuilder, "android/media/AudioAttributes$Builder", 21)
+DECLARE_JNI_CLASS (AndroidAudioAttributesBuilder, "android/media/AudioAttributes$Builder")
 #undef JNI_CLASS_MEMBERS
 
 #define JNI_CLASS_MEMBERS(METHOD, STATICMETHOD, FIELD, STATICFIELD, CALLBACK) \
@@ -401,6 +473,7 @@ DECLARE_JNI_CLASS (AndroidHandlerThread, "android/os/HandlerThread")
 
 #define JNI_CLASS_MEMBERS(METHOD, STATICMETHOD, FIELD, STATICFIELD, CALLBACK) \
   STATICMETHOD (createChooser, "createChooser", "(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent;") \
+  STATICMETHOD (createChooserWithSender, "createChooser", "(Landroid/content/Intent;Ljava/lang/CharSequence;Landroid/content/IntentSender;)Landroid/content/Intent;") \
   METHOD (addCategory,                    "addCategory",    "(Ljava/lang/String;)Landroid/content/Intent;") \
   METHOD (constructor,                    "<init>",         "()V") \
   METHOD (constructorWithContextAndClass, "<init>",         "(Landroid/content/Context;Ljava/lang/Class;)V") \
@@ -427,12 +500,6 @@ DECLARE_JNI_CLASS (AndroidHandlerThread, "android/os/HandlerThread")
   METHOD (setType,                        "setType",        "(Ljava/lang/String;)Landroid/content/Intent;") \
 
 DECLARE_JNI_CLASS (AndroidIntent, "android/content/Intent")
-#undef JNI_CLASS_MEMBERS
-
-#define JNI_CLASS_MEMBERS(METHOD, STATICMETHOD, FIELD, STATICFIELD, CALLBACK) \
-  STATICMETHOD (createChooser, "createChooser", "(Landroid/content/Intent;Ljava/lang/CharSequence;Landroid/content/IntentSender;)Landroid/content/Intent;") \
-
-DECLARE_JNI_CLASS_WITH_MIN_SDK (AndroidIntent22, "android/content/Intent", 22)
 #undef JNI_CLASS_MEMBERS
 
 #define JNI_CLASS_MEMBERS(METHOD, STATICMETHOD, FIELD, STATICFIELD, CALLBACK) \
@@ -507,7 +574,7 @@ DECLARE_JNI_CLASS (AndroidPendingIntent, "android/app/PendingIntent")
 #define JNI_CLASS_MEMBERS(METHOD, STATICMETHOD, FIELD, STATICFIELD, CALLBACK) \
   METHOD (toString, "toString", "()Ljava/lang/String;")
 
-DECLARE_JNI_CLASS_WITH_MIN_SDK (AndroidRange, "android/util/Range", 21)
+DECLARE_JNI_CLASS (AndroidRange, "android/util/Range")
 #undef JNI_CLASS_MEMBERS
 
 #define JNI_CLASS_MEMBERS(METHOD, STATICMETHOD, FIELD, STATICFIELD, CALLBACK) \
@@ -546,7 +613,7 @@ DECLARE_JNI_CLASS (AndroidConfiguration, "android/content/res/Configuration")
   METHOD (getHeight, "getHeight", "()I") \
   METHOD (getWidth,  "getWidth",  "()I")
 
-DECLARE_JNI_CLASS_WITH_MIN_SDK (AndroidSize, "android/util/Size", 21)
+DECLARE_JNI_CLASS (AndroidSize, "android/util/Size")
 #undef JNI_CLASS_MEMBERS
 
 #define JNI_CLASS_MEMBERS(METHOD, STATICMETHOD, FIELD, STATICFIELD, CALLBACK) \
@@ -576,15 +643,10 @@ DECLARE_JNI_CLASS (AndroidUri, "android/net/Uri")
  METHOD (getRootView,               "getRootView",               "()Landroid/view/View;") \
  METHOD (addOnLayoutChangeListener, "addOnLayoutChangeListener", "(Landroid/view/View$OnLayoutChangeListener;)V") \
  METHOD (announceForAccessibility,  "announceForAccessibility",  "(Ljava/lang/CharSequence;)V")  \
-
-DECLARE_JNI_CLASS (AndroidView, "android/view/View")
-#undef JNI_CLASS_MEMBERS
-
-#define JNI_CLASS_MEMBERS(METHOD, STATICMETHOD, FIELD, STATICFIELD, CALLBACK) \
  METHOD (setOnApplyWindowInsetsListener, "setOnApplyWindowInsetsListener", "(Landroid/view/View$OnApplyWindowInsetsListener;)V") \
  METHOD (getRootWindowInsets, "getRootWindowInsets", "()Landroid/view/WindowInsets;")
 
- DECLARE_JNI_CLASS_WITH_MIN_SDK (AndroidView23, "android/view/View", 23)
+DECLARE_JNI_CLASS (AndroidView, "android/view/View")
 #undef JNI_CLASS_MEMBERS
 
 #define JNI_CLASS_MEMBERS(METHOD, STATICMETHOD, FIELD, STATICFIELD, CALLBACK) \
@@ -846,7 +908,7 @@ namespace
                                                             javaString ("").get()));
 
         for (int i = 0; i < juceArray.size(); ++i)
-            env->SetObjectArrayElement (result, i, javaString (juceArray [i]).get());
+            env->SetObjectArrayElement (result.get(), i, javaString (juceArray [i]).get());
 
         return result;
     }

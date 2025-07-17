@@ -1,24 +1,33 @@
 /*
   ==============================================================================
 
-   This file is part of the JUCE library.
-   Copyright (c) 2022 - Raw Material Software Limited
+   This file is part of the JUCE framework.
+   Copyright (c) Raw Material Software Limited
 
-   JUCE is an open source library subject to commercial or open-source
+   JUCE is an open source framework subject to commercial or open source
    licensing.
 
-   By using JUCE, you agree to the terms of both the JUCE 7 End-User License
-   Agreement and JUCE Privacy Policy.
+   By downloading, installing, or using the JUCE framework, or combining the
+   JUCE framework with any other source code, object code, content or any other
+   copyrightable work, you agree to the terms of the JUCE End User Licence
+   Agreement, and all incorporated terms including the JUCE Privacy Policy and
+   the JUCE Website Terms of Service, as applicable, which will bind you. If you
+   do not agree to the terms of these agreements, we will not license the JUCE
+   framework to you, and you must discontinue the installation or download
+   process and cease use of the JUCE framework.
 
-   End User License Agreement: www.juce.com/juce-7-licence
-   Privacy Policy: www.juce.com/juce-privacy-policy
+   JUCE End User Licence Agreement: https://juce.com/legal/juce-8-licence/
+   JUCE Privacy Policy: https://juce.com/juce-privacy-policy
+   JUCE Website Terms of Service: https://juce.com/juce-website-terms-of-service/
 
-   Or: You may also use this code under the terms of the GPL v3 (see
-   www.gnu.org/licenses).
+   Or:
 
-   JUCE IS PROVIDED "AS IS" WITHOUT ANY WARRANTY, AND ALL WARRANTIES, WHETHER
-   EXPRESSED OR IMPLIED, INCLUDING MERCHANTABILITY AND FITNESS FOR PURPOSE, ARE
-   DISCLAIMED.
+   You may also use this code under the terms of the AGPLv3:
+   https://www.gnu.org/licenses/agpl-3.0.en.html
+
+   THE JUCE FRAMEWORK IS PROVIDED "AS IS" WITHOUT ANY WARRANTY, AND ALL
+   WARRANTIES, WHETHER EXPRESSED OR IMPLIED, INCLUDING WARRANTY OF
+   MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, ARE DISCLAIMED.
 
   ==============================================================================
 */
@@ -29,6 +38,24 @@ namespace juce
 class OpenGLFrameBuffer::Pimpl
 {
 public:
+    /*  Stores the currently-bound texture on construction, and re-binds it on destruction. */
+    struct ScopedTextureBinding
+    {
+        ScopedTextureBinding()
+        {
+            glGetIntegerv (GL_TEXTURE_BINDING_2D, &prev);
+            JUCE_CHECK_OPENGL_ERROR
+        }
+
+        ~ScopedTextureBinding()
+        {
+            glBindTexture (GL_TEXTURE_2D, (GLuint) prev);
+            JUCE_CHECK_OPENGL_ERROR
+        }
+
+        GLint prev{};
+    };
+
     Pimpl (OpenGLContext& c, const int w, const int h,
            const bool wantsDepthBuffer, const bool wantsStencilBuffer)
         : context (c), width (w), height (h),
@@ -47,18 +74,22 @@ public:
         context.extensions.glGenFramebuffers (1, &frameBufferID);
         bind();
 
-        glGenTextures (1, &textureID);
-        glBindTexture (GL_TEXTURE_2D, textureID);
-        JUCE_CHECK_OPENGL_ERROR
+        {
+            const ScopedTextureBinding scopedTextureBinding;
 
-        glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        JUCE_CHECK_OPENGL_ERROR
+            glGenTextures (1, &textureID);
+            glBindTexture (GL_TEXTURE_2D, textureID);
+            JUCE_CHECK_OPENGL_ERROR
 
-        glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        JUCE_CHECK_OPENGL_ERROR
+            glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            JUCE_CHECK_OPENGL_ERROR
+
+            glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            JUCE_CHECK_OPENGL_ERROR
+        }
 
         context.extensions.glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textureID, 0);
 
@@ -115,13 +146,14 @@ public:
 
     void bind()
     {
+        glGetIntegerv (GL_FRAMEBUFFER_BINDING, &prevFramebuffer);
         context.extensions.glBindFramebuffer (GL_FRAMEBUFFER, frameBufferID);
         JUCE_CHECK_OPENGL_ERROR
     }
 
     void unbind()
     {
-        context.extensions.glBindFramebuffer (GL_FRAMEBUFFER, context.getFrameBufferID());
+        context.extensions.glBindFramebuffer (GL_FRAMEBUFFER, (GLuint) prevFramebuffer);
         JUCE_CHECK_OPENGL_ERROR
     }
 
@@ -131,6 +163,8 @@ public:
     bool hasDepthBuffer, hasStencilBuffer;
 
 private:
+    GLint prevFramebuffer{};
+
     bool checkStatus() noexcept
     {
         const GLenum status = context.extensions.glCheckFramebufferStatus (GL_FRAMEBUFFER);
@@ -221,10 +255,11 @@ bool OpenGLFrameBuffer::initialise (OpenGLFrameBuffer& other)
 
         clearGLError();
        #endif
-        glBindTexture (GL_TEXTURE_2D, p->textureID);
-        pimpl->context.copyTexture (area, area, area.getWidth(), area.getHeight(), false);
-        glBindTexture (GL_TEXTURE_2D, 0);
-        JUCE_CHECK_OPENGL_ERROR
+        {
+            const Pimpl::ScopedTextureBinding scopedTextureBinding;
+            glBindTexture (GL_TEXTURE_2D, p->textureID);
+            pimpl->context.copyTexture (area, area, area.getWidth(), area.getHeight(), false);
+        }
 
         pimpl->unbind();
         return true;
@@ -347,7 +382,7 @@ bool OpenGLFrameBuffer::writePixels (const PixelARGB* data, const Rectangle<int>
     glViewport (0, 0, pimpl->width, pimpl->height);
     pimpl->context.copyTexture (area, Rectangle<int> (area.getX(), area.getY(),
                                                       tex.getWidth(), tex.getHeight()),
-                                pimpl->width, pimpl->height, true);
+                                pimpl->width, pimpl->height, true, false);
 
     JUCE_CHECK_OPENGL_ERROR
     return true;

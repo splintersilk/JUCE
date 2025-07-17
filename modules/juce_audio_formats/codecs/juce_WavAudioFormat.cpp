@@ -1,24 +1,33 @@
 /*
   ==============================================================================
 
-   This file is part of the JUCE library.
-   Copyright (c) 2022 - Raw Material Software Limited
+   This file is part of the JUCE framework.
+   Copyright (c) Raw Material Software Limited
 
-   JUCE is an open source library subject to commercial or open-source
+   JUCE is an open source framework subject to commercial or open source
    licensing.
 
-   By using JUCE, you agree to the terms of both the JUCE 7 End-User License
-   Agreement and JUCE Privacy Policy.
+   By downloading, installing, or using the JUCE framework, or combining the
+   JUCE framework with any other source code, object code, content or any other
+   copyrightable work, you agree to the terms of the JUCE End User Licence
+   Agreement, and all incorporated terms including the JUCE Privacy Policy and
+   the JUCE Website Terms of Service, as applicable, which will bind you. If you
+   do not agree to the terms of these agreements, we will not license the JUCE
+   framework to you, and you must discontinue the installation or download
+   process and cease use of the JUCE framework.
 
-   End User License Agreement: www.juce.com/juce-7-licence
-   Privacy Policy: www.juce.com/juce-privacy-policy
+   JUCE End User Licence Agreement: https://juce.com/legal/juce-8-licence/
+   JUCE Privacy Policy: https://juce.com/juce-privacy-policy
+   JUCE Website Terms of Service: https://juce.com/juce-website-terms-of-service/
 
-   Or: You may also use this code under the terms of the GPL v3 (see
-   www.gnu.org/licenses).
+   Or:
 
-   JUCE IS PROVIDED "AS IS" WITHOUT ANY WARRANTY, AND ALL WARRANTIES, WHETHER
-   EXPRESSED OR IMPLIED, INCLUDING MERCHANTABILITY AND FITNESS FOR PURPOSE, ARE
-   DISCLAIMED.
+   You may also use this code under the terms of the AGPLv3:
+   https://www.gnu.org/licenses/agpl-3.0.en.html
+
+   THE JUCE FRAMEWORK IS PROVIDED "AS IS" WITHOUT ANY WARRANTY, AND ALL
+   WARRANTIES, WHETHER EXPRESSED OR IMPLIED, INCLUDING WARRANTY OF
+   MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, ARE DISCLAIMED.
 
   ==============================================================================
 */
@@ -791,6 +800,10 @@ namespace WavFileHelpers
                         {
                             MemoryBlock mb;
                             input.readIntoMemoryBlock (mb, (ssize_t) infoLength);
+
+                            if (infoLength & 1)
+                                input.skipNextBytes (1);
+
                             values[type] = String::createStringFromData ((const char*) mb.getData(),
                                                                          (int) mb.getSize());
                             break;
@@ -948,7 +961,7 @@ namespace WavFileHelpers
         }
     };
 
-    //=============================================================================
+    //==============================================================================
     namespace IXMLChunk
     {
         static const std::unordered_set<String> aswgMetadataKeys
@@ -1204,7 +1217,7 @@ namespace WavFileHelpers
 }
 
 //==============================================================================
-class WavAudioFormatReader  : public AudioFormatReader
+class WavAudioFormatReader final : public AudioFormatReader
 {
 public:
     WavAudioFormatReader (InputStream* in)  : AudioFormatReader (in, wavFormatName)
@@ -1264,16 +1277,18 @@ public:
                     // read the format chunk
                     auto format = (unsigned short) input->readShort();
                     numChannels = (unsigned int) input->readShort();
-                    sampleRate = input->readInt();
-                    auto bytesPerSec = input->readInt();
+                    const auto intSampleRate = (uint32_t) input->readInt();
+                    sampleRate = intSampleRate;
+                    auto bytesPerSec = (uint32_t) input->readInt();
                     input->skipNextBytes (2);
                     bitsPerSample = (unsigned int) (int) input->readShort();
 
-                    if (bitsPerSample > 64 && (int) sampleRate != 0)
+                    if (bitsPerSample > 64 && intSampleRate > 0)
                     {
-                        bytesPerFrame = bytesPerSec / (int) sampleRate;
+                        bytesPerFrame = (int) (bytesPerSec / intSampleRate);
+                        jassert (bytesPerFrame >= 0);
 
-                        if (numChannels != 0)
+                        if (numChannels > 0)
                             bitsPerSample = 8 * (unsigned int) bytesPerFrame / numChannels;
                     }
                     else
@@ -1579,7 +1594,7 @@ private:
 };
 
 //==============================================================================
-class WavAudioFormatWriter  : public AudioFormatWriter
+class WavAudioFormatWriter final : public AudioFormatWriter
 {
 public:
     WavAudioFormatWriter (OutputStream* const out, const double rate,
@@ -1843,7 +1858,7 @@ private:
 };
 
 //==============================================================================
-class MemoryMappedWavReader   : public MemoryMappedAudioFormatReader
+class MemoryMappedWavReader final : public MemoryMappedAudioFormatReader
 {
 public:
     MemoryMappedWavReader (const File& wavFile, const WavAudioFormatReader& reader)
@@ -1857,6 +1872,9 @@ public:
     {
         clearSamplesBeyondAvailableLength (destSamples, numDestChannels, startOffsetInDestBuffer,
                                            startSampleInFile, numSamples, lengthInSamples);
+
+        if (numSamples <= 0)
+            return true;
 
         if (map == nullptr || ! mappedSection.contains (Range<int64> (startSampleInFile, startSampleInFile + numSamples)))
         {
@@ -2113,7 +2131,7 @@ bool WavAudioFormat::replaceMetadataInFile (const File& wavFile, const StringPai
 //==============================================================================
 #if JUCE_UNIT_TESTS
 
-struct WaveAudioFormatTests : public UnitTest
+struct WaveAudioFormatTests final : public UnitTest
 {
     WaveAudioFormatTests()
         : UnitTest ("Wave audio format tests", UnitTestCategories::audio)
@@ -2133,7 +2151,11 @@ struct WaveAudioFormatTests : public UnitTest
         for (int i = numElementsInArray (WavFileHelpers::ListInfoChunk::types); --i >= 0;)
             metadataValues[WavFileHelpers::ListInfoChunk::types[i]] = WavFileHelpers::ListInfoChunk::types[i];
 
-        metadataValues[WavAudioFormat::internationalStandardRecordingCode] = WavAudioFormat::internationalStandardRecordingCode;
+        const String prefixCode { "AA6Q7" }; // two letters followed by three alphanumeric characters
+        const String yearOfReference { "20" }; // two digits, 20 meaning the year 2020
+        const String designationCode { "00047" }; // five digits
+
+        metadataValues[WavAudioFormat::internationalStandardRecordingCode] = prefixCode + yearOfReference + designationCode;;
 
         if (metadataValues.size() > 0)
             metadataValues["MetaDataSource"] = "WAV";

@@ -3,6 +3,26 @@
 This file lists the more notable headline features. For more detailed info
 about changes and bugfixes please see the git log and BREAKING_CHANGES.md.
 
+## Version 8.0.8
+
+  - Improved the TextEditor layout behaviour
+  - Added new options to control text line spacing
+  - Added more Direct2D bug fixes and performance improvements
+  - Fixed a iOS simulator buffer size issue
+  - Moved the MIDI CapabilityInquiry Demo into the DemoRunner
+  - Updated the default Android toolchain version
+
+## Version 8.0.7
+
+  - Improved unicode handling and performance in TextEditor
+  - Fixed iOS external device sample rate handling in iOS 18
+  - Added many Direct2D bug fixes and performance improvements
+  - Added a new MessageManager::callSync counterpart to callAsync
+  - Fixed a crash in Ableton when closing a plug-in window
+  - Improved sscache compatibility
+  - Fixed some PopupMenu bugs
+  - Updated Zlib
+
 ## Version 8.0.6
 
   - Changed a Visual Studio toolchain error into a warning 

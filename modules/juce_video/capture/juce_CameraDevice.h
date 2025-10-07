@@ -134,8 +134,9 @@ public:
 
         Android does not support simultaneous video recording and still picture capture.
      */
-    void takeStillPicture (std::function<void (const Image&)> pictureTakenCallback);
-
+    void takeStillPicture (std::function<void (const Image&)> pictureTakenCallback,
+                           const bool skipReorientation = false);
+    
     /** Starts recording video to the specified file.
 
         You should use getFileExtension() to find out the correct extension to

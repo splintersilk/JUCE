@@ -158,8 +158,14 @@ Component* CameraDevice::createViewerComponent()
     return new ViewerComponent (*this);
 }
 
-void CameraDevice::takeStillPicture (std::function<void (const Image&)> pictureTakenCallback)
+void CameraDevice::takeStillPicture (std::function<void (const Image&)> pictureTakenCallback,
+                                     const bool skipReorientation)
 {
+#if JUCE_IOS
+    if (skipReorientation)
+        return pimpl->takeStillPictureWithoutReorientation (pictureTakenCallback);
+#endif
+    
     pimpl->takeStillPicture (pictureTakenCallback);
 }
 

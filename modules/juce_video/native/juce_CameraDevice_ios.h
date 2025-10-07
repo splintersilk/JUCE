@@ -141,6 +141,19 @@ struct CameraDevice::Pimpl
         triggerStillPictureCapture();
     }
 
+    void takeStillPictureWithoutReorientation (std::function<void (const Image&)> pictureTakenCallbackToUse)
+    {
+        if (pictureTakenCallbackToUse == nullptr)
+        {
+            jassertfalse;
+            return;
+        }
+
+        pictureTakenCallback = std::move (pictureTakenCallbackToUse);
+
+        captureSession.takeStillPictureWithoutReorientation();
+    }
+
     void startRecordingToFile (const File& file, int /*quality*/)
     {
         file.deleteFile();
@@ -490,6 +503,18 @@ private:
             stillPictureTaker.takePicture();
         }
 
+        void takeStillPictureWithoutReorientation()
+        {
+            if (! openedOk())
+            {
+                // A session must be started first!
+                jassert (openedOk());
+                return;
+            }
+
+            stillPictureTaker.takePictureWithoutReorientation();
+        }
+
         void startRecording (const File& file)
         {
             if (! openedOk())
@@ -635,6 +660,16 @@ private:
 
             void takePicture()
             {
+                takePictureInternal (true);  // Apply orientation correction
+            }
+
+            void takePictureWithoutReorientation()
+            {
+                takePictureInternal (false);  // Skip orientation correction
+            }
+
+            void takePictureInternal (bool applyOrientation)
+            {
                 if (takingPicture)
                 {
                     // Picture taking already in progress!
@@ -643,6 +678,7 @@ private:
                 }
 
                 takingPicture = true;
+                shouldApplyOrientation = applyOrientation;
 
                 printImageOutputDebugInfo (captureOutput);
 
@@ -775,8 +811,17 @@ private:
 
                                    auto* imageOrientation = (NSNumber *) capturePhoto.metadata[(NSString*) kCGImagePropertyOrientation];
 
-                                   auto* uiImage = getImageWithCorrectOrientation ((CGImagePropertyOrientation) imageOrientation.unsignedIntValue,
-                                   [capturePhoto CGImageRepresentation]);
+                                   // Check the flag to decide whether to apply orientation
+                                   UIImage* uiImage = nullptr;
+                                   if (getOwner (self).shouldApplyOrientation)
+                                   {
+                                       uiImage = getImageWithCorrectOrientation ((CGImagePropertyOrientation) imageOrientation.unsignedIntValue,
+                                                                                 [capturePhoto CGImageRepresentation]);
+                                   }
+                                   else
+                                   {
+                                       uiImage = [UIImage imageWithCGImage: [capturePhoto CGImageRepresentation]];
+                                   }
 
                                    auto* imageData = UIImageJPEGRepresentation (uiImage, 0.f);
 
@@ -902,6 +947,7 @@ private:
             std::unique_ptr<NSObject, NSObjectDeleter> photoOutputDelegate;
 
             bool takingPicture = false;
+            bool shouldApplyOrientation = true;  // Flag to control orientation correction
         };
 
         //==============================================================================

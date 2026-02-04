@@ -509,7 +509,11 @@ struct iOSAudioIODevice::Pimpl final : public AsyncUpdater
 
         if (err != noErr || audioQueue == nullptr)
         {
-            jassertfalse;
+            // Don't assert here - this can legitimately fail when the debugger is attached
+            // The caller already handles this gracefully by falling back to session.sampleRate
+            JUCE_IOS_AUDIO_LOG ("AudioQueueNewOutput failed (err: " << err
+                              << ") - falling back to session.sampleRate. "
+                              << "This is expected when running under debugger.");
             return {};
         }
 

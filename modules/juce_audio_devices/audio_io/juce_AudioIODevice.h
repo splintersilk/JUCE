@@ -322,6 +322,17 @@ public:
     /** Returns the workgroup for this device. */
     virtual AudioWorkgroup getWorkgroup() const { return {}; }
 
+    /** Lightweight audio route refresh.
+
+        On iOS, cycles the AVAudioSession (deactivate/reactivate) without
+        tearing down the AudioUnit, forcing the OS to rebuild the route
+        descriptor.  This is much faster than a full close()/open() cycle
+        and avoids the SubstituteAudioUnit wait on iOS 18+.
+
+        No-op on platforms that don't need it.
+    */
+    virtual void refreshAudioRoute() {}
+
     //==============================================================================
     /** True if this device can show a pop-up control panel for editing its settings.
 

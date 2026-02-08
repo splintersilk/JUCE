@@ -78,6 +78,8 @@ public:
 
     AudioWorkgroup getWorkgroup() const override;
 
+    void refreshAudioRoute() override;
+
     //==============================================================================
     void setMidiMessageCollector (MidiMessageCollector*);
     AudioPlayHead* getAudioPlayHead() const;

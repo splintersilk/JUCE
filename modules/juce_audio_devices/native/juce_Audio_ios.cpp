@@ -982,15 +982,19 @@ struct iOSAudioIODevice::Pimpl final : public AsyncUpdater
         JUCE_IOS_AUDIO_LOG ("handleStatusChange: enabled: " << (int) enabled << ", reason: " << reason);
 
         isRunning = enabled;
-        setAudioSessionActive (enabled);
 
         if (enabled)
+        {
+            setAudioSessionActive (false);
+            setAudioSessionActive (true);
             AudioOutputUnitStart (audioUnit);
+        }
         else
+        {
             AudioOutputUnitStop (audioUnit);
-
-        if (! enabled)
+            setAudioSessionActive (false);
             invokeAudioDeviceErrorCallback (reason);
+        }
     }
 
     void handleRouteChange (AVAudioSessionRouteChangeReason reason)
@@ -1340,6 +1344,15 @@ struct iOSAudioIODevice::Pimpl final : public AsyncUpdater
         }
     }
 
+    // Cycle the AVAudioSession directly to force iOS to rebuild the audio
+    // route descriptor.  Bypasses setAudioSessionActive() to avoid the
+    // SubstituteAudioUnit wait (up to 1s on iOS 18+).
+    static void cycleAudioSession()
+    {
+        JUCE_NSERROR_CHECK ([[AVAudioSession sharedInstance] setActive: NO  error: &error]);
+        JUCE_NSERROR_CHECK ([[AVAudioSession sharedInstance] setActive: YES error: &error]);
+    }
+
     void restart()
     {
         const ScopedLock sl (callbackLock);
@@ -1356,6 +1369,8 @@ struct iOSAudioIODevice::Pimpl final : public AsyncUpdater
             }
 
         }
+
+        cycleAudioSession();
 
         setTargetSampleRateAndBufferSize();
         updateHardwareInfo();
@@ -1375,6 +1390,18 @@ struct iOSAudioIODevice::Pimpl final : public AsyncUpdater
 
                 AudioOutputUnitStart (audioUnit);
             }
+        }
+    }
+
+    void refreshRoute()
+    {
+        const ScopedLock sl (callbackLock);
+
+        if (isRunning && audioUnit != nullptr)
+        {
+            AudioOutputUnitStop (audioUnit);
+            cycleAudioSession();
+            AudioOutputUnitStart (audioUnit);
         }
     }
 
@@ -1669,6 +1696,8 @@ int iOSAudioIODevice::getInputLatencyInSamples()                    { return rou
 int iOSAudioIODevice::getOutputLatencyInSamples()                   { return roundToInt (pimpl->sampleRate * [AVAudioSession sharedInstance].outputLatency); }
 int iOSAudioIODevice::getXRunCount() const noexcept                 { return pimpl->xrun; }
 AudioWorkgroup iOSAudioIODevice::getWorkgroup() const               { return pimpl->workgroup; }
+
+void iOSAudioIODevice::refreshAudioRoute()                          { pimpl->refreshRoute(); }
 
 void iOSAudioIODevice::setMidiMessageCollector (MidiMessageCollector* collector) { pimpl->messageCollector = collector; }
 AudioPlayHead* iOSAudioIODevice::getAudioPlayHead() const           { return &pimpl->playhead; }

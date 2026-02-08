@@ -212,6 +212,17 @@
  #define JUCE_DISABLE_AUDIO_MIXING_WITH_OTHER_APPS 0
 #endif
 
+/** Config: JUCE_DISABLE_BLUETOOTH_HFP
+    When enabled, the PlayAndRecord audio session category will not include
+    the AllowBluetooth/AllowBluetoothHFP option. Bluetooth A2DP (stereo output)
+    remains available. Use this when your app uses the device mic for input
+    and Bluetooth only for stereo output, to prevent iOS from switching
+    Bluetooth devices to the lower-quality HFP (hands-free) profile.
+*/
+#ifndef JUCE_DISABLE_BLUETOOTH_HFP
+ #define JUCE_DISABLE_BLUETOOTH_HFP 0
+#endif
+
 //==============================================================================
 #include "midi_io/juce_ScheduledEventThread.h"
 #include "midi_io/ump/juce_UMPEndpointId.h"

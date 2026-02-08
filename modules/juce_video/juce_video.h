@@ -74,6 +74,15 @@
  #define JUCE_USE_CAMERA 0
 #endif
 
+/** Config: JUCE_CAMERA_ENABLE_AUDIO_INPUT
+    When disabled, the camera capture session will not add an audio input device.
+    Set this to 0 if your app handles audio separately and does not need audio
+    captured alongside video from the camera.
+*/
+#ifndef JUCE_CAMERA_ENABLE_AUDIO_INPUT
+ #define JUCE_CAMERA_ENABLE_AUDIO_INPUT 1
+#endif
+
 #ifndef JUCE_CAMERA_LOG_ENABLED
  #define JUCE_CAMERA_LOG_ENABLED 0
 #endif

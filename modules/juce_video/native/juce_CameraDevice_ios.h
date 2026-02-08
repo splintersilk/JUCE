@@ -369,6 +369,8 @@ private:
               stillPictureTaker (*this),
               videoRecorder (*this)
         {
+            captureSession.get().automaticallyConfiguresApplicationAudioSession = NO;
+
             static SessionDelegateClass cls;
             delegate.reset ([cls.createInstance() init]);
             SessionDelegateClass::setOwner (delegate.get(), this);
@@ -436,7 +438,9 @@ private:
             dispatch_async (captureSessionQueue,^
                             {
                                 cameraDevice = [AVCaptureDevice deviceWithUniqueID: juceStringToNS (cameraIdToUse)];
+                               #if JUCE_CAMERA_ENABLE_AUDIO_INPUT
                                 auto audioDevice = [AVCaptureDevice defaultDeviceWithMediaType: AVMediaTypeAudio];
+                               #endif
 
                                 [captureSession.get() beginConfiguration];
 
@@ -454,6 +458,7 @@ private:
                                     return;
                                 }
 
+                               #if JUCE_CAMERA_ENABLE_AUDIO_INPUT
                                 // ... so add audio explicitly here
                                 error = addInputToDevice (audioDevice);
 
@@ -467,6 +472,7 @@ private:
 
                                     return;
                                 }
+                               #endif
 
                                 [captureSession.get() commitConfiguration];
 

@@ -171,6 +171,10 @@ API_AVAILABLE (ios (13.0))
         windowSceneTracker->setWindowScene (static_cast<UIWindowScene*> (scene));
     else
         jassertfalse;
+
+    // [Splintersilk Patch 3] Handle URLs delivered on cold launch
+    if (connectionOptions.URLContexts.count > 0)
+        [self scene:scene openURLContexts:connectionOptions.URLContexts];
 }
 
 - (void) sceneDidDisconnect: (UIScene*) scene
@@ -205,6 +209,58 @@ API_AVAILABLE (ios (13.0))
              traitCollection: (UITraitCollection*) previousTraitCollection
 {
     windowSceneTracker->setWindowScene (windowScene);
+}
+
+// [Splintersilk Patch 3] Forward URL open events from scene delegate to JUCEApplication::urlOpened().
+// Without this, iOS 18+ with UIScene lifecycle silently drops URLs because the app delegate's
+// application:openURL:options: is no longer called as a fallback.
+- (void) scene: (UIScene*) scene openURLContexts: (NSSet<UIOpenURLContext*>*) URLContexts
+{
+    for (UIOpenURLContext* context in URLContexts)
+    {
+        NSURL* url = context.URL;
+
+        NSUInteger accessOptions = NSFileCoordinatorReadingWithoutChanges;
+        auto* fileAccessIntent = [NSFileAccessIntent readingIntentWithURL:url
+                                                                 options:accessOptions];
+        NSArray<NSFileAccessIntent*>* intents = @[fileAccessIntent];
+        auto* fileCoordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
+
+        [fileCoordinator coordinateAccessWithIntents:intents
+                                               queue:[NSOperationQueue mainQueue]
+                                          byAccessor:^(NSError* err) {
+            if (err == nil) {
+                [url startAccessingSecurityScopedResource];
+
+                NSError* error = nil;
+                NSData* bookmark = [url bookmarkDataWithOptions:0
+                                 includingResourceValuesForKeys:nil
+                                                  relativeToURL:nil
+                                                          error:&error];
+                [bookmark retain];
+                [url stopAccessingSecurityScopedResource];
+
+                URL juceUrl(nsStringToJuce([url absoluteString]));
+
+                if (error == nil) {
+                    setURLBookmark(juceUrl, (void*)bookmark);
+                } else {
+                    auto* desc = [error localizedDescription];
+                    ignoreUnused(desc);
+                    jassertfalse;
+                }
+
+                if (auto* app = JUCEApplicationBase::getInstance())
+                    app->urlOpened(juceUrl);
+                else
+                    jassertfalse;
+            } else {
+                auto* desc = [err localizedDescription];
+                ignoreUnused(desc);
+                jassertfalse;
+            }
+        }];
+    }
 }
 @end
 

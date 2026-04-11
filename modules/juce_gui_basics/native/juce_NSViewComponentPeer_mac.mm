@@ -608,6 +608,17 @@ public:
         return true;
     }
 
+    bool setWindowLevel (int level) override
+    {
+        if (! isSharedWindow)
+        {
+            [window setLevel: static_cast<NSWindowLevel>(level)];
+            return true;
+        }
+
+        return false;
+    }
+
     void toFront (bool makeActiveWindow) override
     {
         if (isSharedWindow)

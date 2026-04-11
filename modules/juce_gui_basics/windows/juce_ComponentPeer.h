@@ -337,6 +337,14 @@ public:
     */
     virtual bool setAlwaysOnTop (bool alwaysOnTop) = 0;
 
+    /** Sets the native window level directly.
+        On iOS this maps to UIWindow.windowLevel, on macOS to NSWindow.level.
+        A value of 0 is the normal/default level. Higher values place the window
+        above other windows at lower levels.
+        Returns false if the peer doesn't support custom window levels.
+    */
+    virtual bool setWindowLevel (int level) { ignoreUnused (level); return false; }
+
     /** Brings the window to the top, optionally also giving it keyboard focus. */
     virtual void toFront (bool takeKeyboardFocus) = 0;
 

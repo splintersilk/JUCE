@@ -257,6 +257,16 @@ public:
     */
     bool isAlwaysOnTop() const noexcept;
 
+    /** Sets the native window level directly.
+        On iOS this maps to UIWindow.windowLevel, on macOS to NSWindow.level.
+        A value of 0 is the normal/default level. A value of 1 places the window
+        just above normal windows without blocking system sheets (unlike
+        setAlwaysOnTop which uses UIWindowLevelAlert on iOS).
+        Returns true if the level was successfully set.
+        @see setAlwaysOnTop
+    */
+    bool setWindowLevel (int level);
+
     //==============================================================================
     /** Returns the x coordinate of the component's left edge.
         This is a distance in pixels from the left edge of the component's parent.

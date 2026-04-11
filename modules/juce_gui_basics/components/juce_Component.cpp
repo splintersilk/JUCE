@@ -799,6 +799,15 @@ bool Component::isAlwaysOnTop() const noexcept
     return flags.alwaysOnTopFlag;
 }
 
+bool Component::setWindowLevel (int level)
+{
+    if (isOnDesktop())
+        if (auto* peer = getPeer())
+            return peer->setWindowLevel (level);
+
+    return false;
+}
+
 //==============================================================================
 int Component::proportionOfWidth  (float proportion) const noexcept   { return roundToInt (proportion * (float) boundsRelativeToParent.getWidth()); }
 int Component::proportionOfHeight (float proportion) const noexcept   { return roundToInt (proportion * (float) boundsRelativeToParent.getHeight()); }

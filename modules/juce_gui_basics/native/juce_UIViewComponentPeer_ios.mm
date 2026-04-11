@@ -424,6 +424,7 @@ public:
     OptionalBorderSize getFrameSizeIfPresent() const override { return {}; }
     BorderSize<int> getFrameSize() const override             { return BorderSize<int>(); }
     bool setAlwaysOnTop (bool alwaysOnTop) override;
+    bool setWindowLevel (int level) override;
     void toFront (bool makeActiveWindow) override;
     void toBehind (ComponentPeer* other) override;
     void setIcon (const Image& newIcon) override;
@@ -2025,6 +2026,17 @@ bool UIViewComponentPeer::setAlwaysOnTop (bool alwaysOnTop)
         window.windowLevel = alwaysOnTop ? UIWindowLevelAlert : UIWindowLevelNormal;
 
     return true;
+}
+
+bool UIViewComponentPeer::setWindowLevel (int level)
+{
+    if (! isSharedWindow && window != nil)
+    {
+        window.windowLevel = static_cast<UIWindowLevel>(level);
+        return true;
+    }
+
+    return false;
 }
 
 void UIViewComponentPeer::toFront (bool makeActiveWindow)

@@ -641,12 +641,17 @@ void ZipFile::Builder::addEntry (InputStream* stream, int compression, const Str
     items.add (new Item ({}, stream, compression, path, time));
 }
 
-bool ZipFile::Builder::writeToStream (OutputStream& target, double* const progress) const
+bool ZipFile::Builder::writeToStream (OutputStream& target, double* const progress,
+                                      const std::atomic<bool>* shouldAbort) const  // [Splintersilk Patch 0003]
 {
     auto fileStart = target.getPosition();
 
     for (int i = 0; i < items.size(); ++i)
     {
+        // [Splintersilk Patch 0003] - per-item abort check
+        if (shouldAbort != nullptr && shouldAbort->load())
+            return false;
+
         if (progress != nullptr)
             *progress = (i + 0.5) / items.size();
 

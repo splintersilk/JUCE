@@ -255,8 +255,11 @@ public:
         /** Generates the zip file, writing it to the specified stream.
             If the progress parameter is non-null, it will be updated with an approximate
             progress status between 0 and 1.0
+            If shouldAbort is non-null and becomes true, writing stops between items
+            and the method returns false.  [Splintersilk Patch 0003]
         */
-        bool writeToStream (OutputStream& target, double* progress) const;
+        bool writeToStream (OutputStream& target, double* progress,
+                            const std::atomic<bool>* shouldAbort = nullptr) const;
 
         //==============================================================================
     private:

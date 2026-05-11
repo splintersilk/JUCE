@@ -74,6 +74,13 @@ struct ZipFile::ZipEntryHolder
         auto minutes   = (int) ((time >> 5) & 63);
         auto seconds   = (int) ((time & 31) << 1);
 
+        // [Splintersilk Patch 0004] DOS-zip seconds field is 5 bits storing
+        // seconds/2 (legal 0..29 -> 0..58). Some writers (including stock JUCE's
+        // writeTimeAndDate) store the raw seconds, which can read back here as
+        // 60 or 62. Clamp to a valid range so the Time ctor's mktime round-trip
+        // check (juce_Time.cpp) does not assert on otherwise-readable archives.
+        if (seconds > 59) seconds = 59;
+
         return { year, month, day, hours, minutes, seconds };
     }
 
@@ -572,7 +579,10 @@ private:
 
     static void writeTimeAndDate (OutputStream& target, Time t)
     {
-        target.writeShort ((short) (t.getSeconds() + (t.getMinutes() << 5) + (t.getHours() << 11)));
+        // [Splintersilk Patch 0004] DOS-zip seconds field stores seconds/2 in
+        // its low 5 bits. Storing raw seconds (0..59) overflows the slot and
+        // makes parseFileTime read back 60 or 62, which mktime rejects.
+        target.writeShort ((short) ((t.getSeconds() / 2) + (t.getMinutes() << 5) + (t.getHours() << 11)));
         target.writeShort ((short) (t.getDayOfMonth() + ((t.getMonth() + 1) << 5) + ((t.getYear() - 1980) << 9)));
     }
 

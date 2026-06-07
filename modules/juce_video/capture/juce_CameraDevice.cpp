@@ -61,11 +61,22 @@ public:
     {
         auto cameraId = getAvailableDevices()[index];
 
-        if (getCameraIndex (cameraId) != -1)
+        // [Splintersilk Patch 0005] A pending entry for this camera means its
+        // result was never delivered (open stranded by an app suspend). Treat
+        // it as stale: destroy it and open fresh; the old jassertfalse path
+        // silently swallowed every reopen in release builds. Destroy-first so
+        // the abandoned session stops before the new one starts. Ref doc
+        // decisions 2-4.
         {
-            // You are trying to open the same camera twice.
-            jassertfalse;
-            return;
+            const int staleIndex = getCameraIndex (cameraId);
+
+            if (staleIndex != -1)
+            {
+                JUCE_CAMERA_LOG ("CameraFactory: replacing stale pending open for camera " + cameraId);
+                NullCheckedInvocation::invoke (onPendingOpenAnomaly,
+                                               PendingOpenAnomaly::stalePendingReplaced, cameraId);
+                camerasToOpen.remove (staleIndex);
+            }
         }
 
         std::unique_ptr<CameraDevice> device (new CameraDevice (cameraId, index,
@@ -78,12 +89,24 @@ public:
 
         auto& pendingOpen = camerasToOpen.getReference (camerasToOpen.size() - 1);
 
-        pendingOpen.device->pimpl->open ([this] (const String& deviceId, const String& error)
+        // [Splintersilk Patch 0005] Deliver results by requestId: the iOS error
+        // paths pass an empty deviceId, so the stock deviceId lookup silently
+        // dropped every error result. Ref doc decision 1.
+        pendingOpen.device->pimpl->open ([this, requestId = pendingOpen.requestId, cameraId] (const String&, const String& error)
                                          {
-                                             int cIndex = getCameraIndex (deviceId);
+                                             // resultCallback may destroy the device, freeing this closure
+                                             // mid-call: copy requestId out first; after the callback touch
+                                             // only stack locals. Ref doc decision 6.
+                                             const int completedRequestId = requestId;
+
+                                             int cIndex = getRequestIndex (completedRequestId);
 
                                              if (cIndex == -1)
+                                             {
+                                                 NullCheckedInvocation::invoke (onPendingOpenAnomaly,
+                                                                                PendingOpenAnomaly::lateResultDropped, cameraId);
                                                  return;
+                                             }
 
                                              auto& cameraPendingOpen = camerasToOpen.getReference (cIndex);
 
@@ -92,9 +115,7 @@ public:
                                              else
                                                  cameraPendingOpen.resultCallback (nullptr, error);
 
-                                             int id = cameraPendingOpen.requestId;
-
-                                             MessageManager::callAsync ([this, id]() { removeRequestWithId (id); });
+                                             MessageManager::callAsync ([this, completedRequestId]() { removeRequestWithId (completedRequestId); });
                                          });
     }
 
@@ -108,6 +129,17 @@ private:
             if (pendingOpen.device->pimpl->getCameraId() == cameraId)
                 return i;
         }
+
+        return -1;
+    }
+
+    // [Splintersilk Patch 0005] requestId-keyed mirror of getCameraIndex, for
+    // result delivery (see the open lambda above).
+    int getRequestIndex (int requestId) const
+    {
+        for (int i = 0; i < camerasToOpen.size(); ++i)
+            if (camerasToOpen.getReference (i).requestId == requestId)
+                return i;
 
         return -1;
     }
@@ -138,6 +170,10 @@ private:
 int CameraDevice::CameraFactory::nextRequestId = 0;
 
 #endif
+
+// [Splintersilk Patch 0005] Defined unconditionally so the symbol exists on
+// every platform; only the iOS/Android factory invokes it.
+std::function<void (CameraDevice::PendingOpenAnomaly, const String&)> CameraDevice::onPendingOpenAnomaly;
 
 //==============================================================================
 CameraDevice::CameraDevice (const String& nm, int index, int minWidth, int minHeight, int maxWidth, int maxHeight, bool useHighQuality)

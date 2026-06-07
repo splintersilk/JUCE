@@ -183,6 +183,22 @@ public:
     std::function<void (const String& /*error*/)> onErrorOccurred;
 
     //==============================================================================
+    // [Splintersilk Patch 0005]
+    /** Pending-open anomalies (iOS/Android factory).
+
+        stalePendingReplaced: an openDeviceAsync request found an undelivered
+        pending open for the same camera and replaced it; the stale request's
+        callback was discarded uninvoked.
+        lateResultDropped: a platform result arrived for a request no longer
+        pending (replaced, or a post-open runtime error) and was dropped.
+
+        Invoked on the message thread. Process-wide, single binding: assign once
+        at app init. Default empty: behaviour is unchanged when unbound.
+    */
+    enum class PendingOpenAnomaly { stalePendingReplaced, lateResultDropped };
+    static std::function<void (PendingOpenAnomaly, const String& cameraId)> onPendingOpenAnomaly;
+
+    //==============================================================================
     /**
         Receives callbacks with individual frames from a CameraDevice. It is mainly
         useful for processing multiple frames that has to be done as quickly as

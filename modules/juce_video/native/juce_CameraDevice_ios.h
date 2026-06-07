@@ -402,13 +402,17 @@ private:
                                                        object: captureSession.get()];
             JUCE_END_IGNORE_WARNINGS_GCC_LIKE
 
+            // [Splintersilk Patch 0005] Queue blocks must be self-contained:
+            // they can outlive this object (detached teardown), so they capture
+            // the retained ObjC session by value, never members. See also
+            // startSessionForDeviceWithId and addOutputIfPossible.
+            AVCaptureSession* retainedSession = captureSession.get();
+
             dispatch_async (captureSessionQueue,^
                             {
-                                [captureSession.get() setSessionPreset: useHighQuality ? AVCaptureSessionPresetHigh
-                                                                                       : AVCaptureSessionPresetMedium];
+                                [retainedSession setSessionPreset: useHighQuality ? AVCaptureSessionPresetHigh
+                                                                                  : AVCaptureSessionPresetMedium];
                             });
-
-            ++numCaptureSessions;
         }
 
         ~CaptureSession()
@@ -417,42 +421,56 @@ private:
 
             stopRecording();
 
-            if (--numCaptureSessions == 0)
-            {
-                dispatch_async (captureSessionQueue, ^
-                                {
-                                    if (captureSession.get().running)
-                                        [captureSession.get() stopRunning];
+            // [Splintersilk Patch 0005] Detached teardown: the stop block
+            // retains the ObjC session by value and touches no members, so the
+            // dtor does not wait (stock blocked the message thread for the
+            // whole queue drain). queueAlive stops a still-queued start block
+            // from launching a session that is about to stop. Ref doc decision 8.
+            queueAlive->store (false);
 
-                                    sessionClosedEvent.signal();
-                                });
+            AVCaptureSession* sessionToStop = captureSession.get();
 
-                sessionClosedEvent.wait (-1);
-            }
+            dispatch_async (captureSessionQueue, ^
+                            {
+                                if (sessionToStop.running)
+                                    [sessionToStop stopRunning];
+                            });
         }
 
         bool openedOk() const noexcept { return sessionStarted; }
 
         void startSessionForDeviceWithId (const String& cameraIdToUse)
         {
+            // [Splintersilk Patch 0005] Self-contained block: copy the session,
+            // liveness flag and WeakReference into locals HERE, while `this` is
+            // provably alive - naming a member or `this` inside the block
+            // implicitly captures raw `this`. The video device is not stored:
+            // getDevice() derives it from the session's inputs. Ref doc decision 8.
+            AVCaptureSession* retainedSession = captureSession.get();
+            std::shared_ptr<std::atomic<bool>> alive = queueAlive;
+            WeakReference<CaptureSession> weakOwner (this);
+
             dispatch_async (captureSessionQueue,^
                             {
-                                cameraDevice = [AVCaptureDevice deviceWithUniqueID: juceStringToNS (cameraIdToUse)];
+                                if (! alive->load())
+                                    return;
+
+                                AVCaptureDevice* device = [AVCaptureDevice deviceWithUniqueID: juceStringToNS (cameraIdToUse)];
                                #if JUCE_CAMERA_ENABLE_AUDIO_INPUT
                                 auto audioDevice = [AVCaptureDevice defaultDeviceWithMediaType: AVMediaTypeAudio];
                                #endif
 
-                                [captureSession.get() beginConfiguration];
+                                [retainedSession beginConfiguration];
 
                                 // This will add just video...
-                                auto error = addInputToDevice (cameraDevice);
+                                auto error = addInputToDevice (retainedSession, device);
 
                                 if (error.isNotEmpty())
                                 {
-                                    MessageManager::callAsync ([weakRef = WeakReference<CaptureSession> { this }, error]() mutable
+                                    MessageManager::callAsync ([weakOwner, error]() mutable
                                     {
-                                        if (weakRef != nullptr)
-                                            weakRef->owner.cameraOpenCallback ({}, error);
+                                        if (weakOwner != nullptr)
+                                            weakOwner->owner.cameraOpenCallback ({}, error);
                                     });
 
                                     return;
@@ -460,24 +478,24 @@ private:
 
                                #if JUCE_CAMERA_ENABLE_AUDIO_INPUT
                                 // ... so add audio explicitly here
-                                error = addInputToDevice (audioDevice);
+                                error = addInputToDevice (retainedSession, audioDevice);
 
                                 if (error.isNotEmpty())
                                 {
-                                    MessageManager::callAsync ([weakRef = WeakReference<CaptureSession> { this }, error]() mutable
+                                    MessageManager::callAsync ([weakOwner, error]() mutable
                                     {
-                                        if (weakRef != nullptr)
-                                            weakRef->owner.cameraOpenCallback ({}, error);
+                                        if (weakOwner != nullptr)
+                                            weakOwner->owner.cameraOpenCallback ({}, error);
                                     });
 
                                     return;
                                 }
                                #endif
 
-                                [captureSession.get() commitConfiguration];
+                                [retainedSession commitConfiguration];
 
-                                if (! captureSession.get().running)
-                                    [captureSession.get() startRunning];
+                                if (! retainedSession.running)
+                                    [retainedSession startRunning];
                             });
         }
 
@@ -553,7 +571,22 @@ private:
 
         AVCaptureDevice* getDevice() const
         {
-            return cameraDevice;
+            // [Splintersilk Patch 0005] Derived from the session's inputs, not
+            // a member written from the session queue: deterministic for every
+            // reader (a racing nil member produced a landscape first preview)
+            // and one less cross-queue hazard. Ref doc decision 8.
+            for (AVCaptureInput* input in captureSession.get().inputs)
+            {
+                if (! [input isKindOfClass: [AVCaptureDeviceInput class]])
+                    continue;
+
+                auto* device = ((AVCaptureDeviceInput*) input).device;
+
+                if ([device hasMediaType: AVMediaTypeVideo])
+                    return device;
+            }
+
+            return nil;
         }
 
         AVCaptureVideoPreviewLayer* getPreviewLayer() const
@@ -563,13 +596,15 @@ private:
 
         void updatePreviewOrientation()
         {
-            ifelse_17_0<PreviewLayerAngleTrait> (cameraDevice, previewLayer, previewLayer.connection);
+            ifelse_17_0<PreviewLayerAngleTrait> (getDevice(), previewLayer, previewLayer.connection);
         }
 
         JUCE_DECLARE_WEAK_REFERENCEABLE (CaptureSession)
 
     private:
-        String addInputToDevice (AVCaptureDevice* device)
+        // [Splintersilk Patch 0005] Static, session passed in: called from the
+        // self-contained session-queue block, which must not reach through `this`.
+        static String addInputToDevice (AVCaptureSession* session, AVCaptureDevice* device)
         {
             NSError* error = nil;
 
@@ -580,10 +615,10 @@ private:
                 return nsStringToJuce (error.localizedDescription);
 
             JUCE_BEGIN_IGNORE_WARNINGS_GCC_LIKE ("-Wnullable-to-nonnull-conversion")
-            if (! [captureSession.get() canAddInput: input])
+            if (! [session canAddInput: input])
                 return "Could not add input to camera session.";
 
-            [captureSession.get() addInput: input];
+            [session addInput: input];
             JUCE_END_IGNORE_WARNINGS_GCC_LIKE
             return {};
         }
@@ -599,9 +634,17 @@ private:
                            {
                                JUCE_CAMERA_LOG (nsStringToJuce ([notification description]));
 
+                               // [Splintersilk Patch 0005] The CaptureSession can be destroyed
+                               // (message thread) between this block being queued and run -
+                               // e.g. a stale pending open replaced, or the consumer destroying
+                               // the device inside its result callback. Guard with the module's
+                               // error-path WeakReference idiom instead of a raw owner call.
+                               WeakReference<CaptureSession> weakOwner (&getOwner (self));
+
                                dispatch_async (dispatch_get_main_queue(),
                                                ^{
-                                                   getOwner (self).cameraSessionStarted();
+                                                   if (auto* owner = weakOwner.get())
+                                                       owner->cameraSessionStarted();
                                                });
                            });
 
@@ -616,11 +659,18 @@ private:
                            {
                                JUCE_CAMERA_LOG (nsStringToJuce ([notification description]));
 
+                               // [Splintersilk Patch 0005] Same liveness guard as
+                               // sessionDidStartRunning above.
+                               WeakReference<CaptureSession> weakOwner (&getOwner (self));
+
                                dispatch_async (dispatch_get_main_queue(),
                                                ^{
-                                                   NSError* error = notification.userInfo[AVCaptureSessionErrorKey];
-                                                   auto errorString = error != nil ? nsStringToJuce (error.localizedDescription) : String();
-                                                   getOwner (self).cameraSessionRuntimeError (errorString);
+                                                   if (auto* owner = weakOwner.get())
+                                                   {
+                                                       NSError* error = notification.userInfo[AVCaptureSessionErrorKey];
+                                                       auto errorString = error != nil ? nsStringToJuce (error.localizedDescription) : String();
+                                                       owner->cameraSessionRuntimeError (errorString);
+                                                   }
                                                });
                            });
 
@@ -693,7 +743,7 @@ private:
                     auto* photoOutput = (AVCapturePhotoOutput*) captureOutput;
                     auto outputConnection = [photoOutput connectionWithMediaType: AVMediaTypeVideo];
 
-                    ifelse_17_0<CaptureLayerAngleTrait> (captureSession.cameraDevice, captureSession.previewLayer, outputConnection);
+                    ifelse_17_0<CaptureLayerAngleTrait> (captureSession.getDevice(), captureSession.previewLayer, outputConnection);
 
                     [photoOutput capturePhotoWithSettings: [AVCapturePhotoSettings photoSettings]
                                                  delegate: id<AVCapturePhotoCaptureDelegate> (photoOutputDelegate.get())];
@@ -993,7 +1043,7 @@ private:
                                       isDirectory: NO];
 
                 auto outputConnection = [movieFileOutput connectionWithMediaType: AVMediaTypeVideo];
-                ifelse_17_0<CaptureLayerAngleTrait> (captureSession.cameraDevice, captureSession.previewLayer, outputConnection);
+                ifelse_17_0<CaptureLayerAngleTrait> (captureSession.getDevice(), captureSession.previewLayer, outputConnection);
 
                 [movieFileOutput startRecordingToOutputFileURL: url recordingDelegate: delegate.get()];
             }
@@ -1082,13 +1132,19 @@ private:
         //==============================================================================
         void addOutputIfPossible (AVCaptureOutput* output)
         {
+            // [Splintersilk Patch 0005] Self-contained: captures the retained
+            // session, not members (the block can outlive this object under
+            // detached teardown). Adding an output to a session that is about
+            // to stop is harmless.
+            AVCaptureSession* retainedSession = captureSession.get();
+
             dispatch_async (captureSessionQueue,^
                             {
-                                if ([captureSession.get() canAddOutput: output])
+                                if ([retainedSession canAddOutput: output])
                                 {
-                                    [captureSession.get() beginConfiguration];
-                                    [captureSession.get() addOutput: output];
-                                    [captureSession.get() commitConfiguration];
+                                    [retainedSession beginConfiguration];
+                                    [retainedSession addOutput: output];
+                                    [retainedSession commitConfiguration];
 
                                     return;
                                 }
@@ -1130,14 +1186,15 @@ private:
         StillPictureTaker stillPictureTaker;
         VideoRecorder videoRecorder;
 
-        AVCaptureDevice* cameraDevice = nil;
         AVCaptureVideoPreviewLayer* previewLayer = nil;
 
         bool sessionStarted = false;
 
-        WaitableEvent sessionClosedEvent;
-
-        static int numCaptureSessions;
+        // [Splintersilk Patch 0005] Shared liveness flag for the session-queue
+        // start block (see startSessionForDeviceWithId); set false in the dtor.
+        // The stock sessionClosedEvent / numCaptureSessions teardown gate was
+        // removed with the blocking wait (ref doc decision 8).
+        std::shared_ptr<std::atomic<bool>> queueAlive = std::make_shared<std::atomic<bool>> (true);
     };
 
     //==============================================================================
@@ -1199,8 +1256,6 @@ private:
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE (Pimpl)
 };
-
-int CameraDevice::Pimpl::CaptureSession::numCaptureSessions = 0;
 
 //==============================================================================
 struct CameraDevice::ViewerComponent  : public UIViewComponent
